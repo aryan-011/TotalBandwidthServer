@@ -1,19 +1,97 @@
 //  g++ start.cpp -o start -lallegro -lallegro_primitives
 #include <bits/stdc++.h>
+#include <allegro5/allegro_font.h>
+#include <allegro5/allegro_ttf.h> // Optional, for TTF font support
 #include "function_str.cpp"
 #include "gantt_chart.cpp"
 
 using namespace std;
 
-void renderGanttChart(vector<struct taskName> taskOutput, vector<struct taskQueue> taskList, int periodicTaskCount, int aperiodicTaskCount)
+PerformanceMetrics calculatePerformanceMetrics(
+    vector<struct taskName> taskOutput,
+    vector<struct taskQueue> taskList,
+    periodicTask *periodicTasks,
+    int periodicCount,
+    int aperiodicCount)
+{
+    PerformanceMetrics metrics = {0};
+
+    // Total simulation time
+    int simulationTime = taskOutput.size();
+
+    // Aperiodic Task Response Time
+    vector<int> aperiodicResponseTimes;
+
+    for (auto &task : taskList)
+    {
+        if (task.name.taskType == 'A')
+        {
+            // Find when this specific aperiodic task ends
+            int taskEndTime = -1;
+            for (int i = 0; i < taskOutput.size(); i++)
+            {
+                if (taskOutput[i].taskType == 'A' &&
+                    taskOutput[i].taskId == task.name.taskId)
+                {
+                    taskEndTime = i;
+                }
+            }
+
+            // Calculate response time if task was found
+            if (taskEndTime != -1)
+            {
+                int responseTime = taskEndTime - task.arrivalTime;
+                aperiodicResponseTimes.push_back(responseTime);
+            }
+        }
+    }
+
+    // Calculate average response time
+    double totalResponseTime = 0;
+    for (int rt : aperiodicResponseTimes)
+    {
+        totalResponseTime += rt;
+    }
+
+    metrics.aperiodicResponseTime = aperiodicResponseTimes.empty() ? 0 : (totalResponseTime / aperiodicResponseTimes.size());
+
+    // Periodic Task Utilization
+    int periodicExecutionTime = 0;
+    for (auto &task : taskOutput)
+    {
+        if (task.taskType == 'P')
+        {
+            periodicExecutionTime++;
+        }
+    }
+    metrics.periodicUtilization = (double)calculateUtilization(periodicCount, periodicTasks) * 100;
+
+    // Server Utilization
+    int idleTicks = 0;
+    for (auto &task : taskOutput)
+    {
+        if (task.taskId == -1)
+        { // Idle task
+            idleTicks++;
+        }
+    }
+
+    metrics.serverUtilization = 100 - metrics.periodicUtilization;
+
+    return metrics;
+}
+void renderGanttChart(vector<struct taskName> taskOutput, vector<struct taskQueue> taskList, int periodicTaskCount, int aperiodicTaskCount, periodicTask *periodicTasks)
 {
     ALLEGRO_DISPLAY *chartDisplay = NULL;
-    if (!al_init()) return;
+    if (!al_init())
+        return;
 
     al_init_primitives_addon();
+    al_init_font_addon();
     chartDisplay = al_create_display(750, 500);
     al_clear_to_color(al_map_rgb(255, 255, 255));
-    if (!chartDisplay) return;
+    if (!chartDisplay)
+        return;
 
     GanttChartRenderer chartRenderer;
     int verticalOffset = 100;
@@ -54,14 +132,44 @@ void renderGanttChart(vector<struct taskName> taskOutput, vector<struct taskQueu
 
             if (taskOutput[timeStep].taskType == 'P')
             {
-                chartRenderer.renderTaskBlock((timeStep + 1) * 25, verticalOffset + (100 * (taskOutput[timeStep].taskId - 1)) - 50, (timeStep + 2) * 25, verticalOffset + (100 * (taskOutput[timeStep].taskId - 1)), 'P');
+                chartRenderer.renderTaskBlock((timeStep + 1) * 25, verticalOffset + (100 * (taskOutput[timeStep].taskId - 1)) - 50, (timeStep + 2) * 25, verticalOffset + (100 * (taskOutput[timeStep].taskId - 1)), 'P', ("P" + to_string(taskOutput[timeStep].taskId)).c_str());
             }
             else if (taskOutput[timeStep].taskType == 'A')
             {
-                chartRenderer.renderTaskBlock((timeStep + 1) * 25, verticalOffset + (100 * periodicTaskCount) - 50, (timeStep + 2) * 25, verticalOffset + (100 * periodicTaskCount), 'A');
+                chartRenderer.renderTaskBlock((timeStep + 1) * 25, verticalOffset + (100 * periodicTaskCount) - 50, (timeStep + 2) * 25, verticalOffset + (100 * periodicTaskCount), 'A', ("A" + to_string(taskOutput[timeStep].taskId)).c_str());
             }
         }
 
+        PerformanceMetrics metrics = calculatePerformanceMetrics(taskOutput, taskList, periodicTasks, periodicTaskCount, aperiodicTaskCount);
+
+        // Render metrics text
+        ALLEGRO_FONT *font = al_create_builtin_font();
+
+        // Prepare and draw individual metric lines
+        char responseTimeText[100];
+        char periodicUtilText[100];
+        char serverUtilText[100];
+
+        snprintf(responseTimeText, sizeof(responseTimeText),
+                 "Aperiodic Avg Response Time: %.2f",
+                 metrics.aperiodicResponseTime);
+
+        snprintf(periodicUtilText, sizeof(periodicUtilText),
+                 "Periodic Task Utilization: %.2f%%",
+                 metrics.periodicUtilization);
+
+        snprintf(serverUtilText, sizeof(serverUtilText),
+                 "Server Utilization: %.2f%%",
+                 metrics.serverUtilization);
+
+        // Draw metrics at the bottom of the chart
+        int bottomY = 350; // Adjust based on your chart height
+        al_draw_text(font, al_map_rgb(0, 0, 0), 50, bottomY, ALLEGRO_ALIGN_LEFT, responseTimeText);
+        al_draw_text(font, al_map_rgb(0, 0, 0), 50, bottomY + 20, ALLEGRO_ALIGN_LEFT, periodicUtilText);
+        al_draw_text(font, al_map_rgb(0, 0, 0), 50, bottomY + 40, ALLEGRO_ALIGN_LEFT, serverUtilText);
+
+        // Cleanup
+        al_destroy_font(font);
         al_flip_display();
         al_rest(0.25);
     }
@@ -119,9 +227,36 @@ int main()
 
     vector<struct taskQueue> combinedTasks;
     vector<struct taskName> outputTasks;
+    double util = calculateUtilization(periodicCount, periodicTasks);
+    if (util > 1)
+    {
+        cout << "Task Set not schedulable since the periodics task utilizations exceed 1 and is " << util;
+        ALLEGRO_DISPLAY *chartDisplay = NULL;
+        if (!al_init())
+            return 0;
+
+        al_init_primitives_addon();
+        al_init_font_addon();
+        chartDisplay = al_create_display(750, 500);
+        if (!chartDisplay)
+        {
+            printf("Failed to create display!\n");
+            return 0;
+        }
+        al_clear_to_color(al_map_rgb(0, 0, 0));
+
+        // Display the message
+        ALLEGRO_FONT *font = al_create_builtin_font();
+        al_draw_text(font, al_map_rgb(255, 0, 0), 200, 100, ALLEGRO_ALIGN_CENTER, "Not Schedulable");
+        al_flip_display();
+
+        // Keep the window open for 3 seconds
+        al_rest(3.0);
+        return 0;
+    }
     combinedTasks = calculateBandwidth(periodicCount, periodicTasks, aperiodicCount, aperiodicTasks, &outputTasks);
 
-    renderGanttChart(outputTasks, combinedTasks, periodicCount, aperiodicCount);
+    renderGanttChart(outputTasks, combinedTasks, periodicCount, aperiodicCount, periodicTasks);
 
     return 0;
 }

@@ -29,4 +29,9 @@ struct taskQueue
 	int deadline;
 };
 
+struct PerformanceMetrics {
+    double aperiodicResponseTime;
+    double periodicUtilization;
+    double serverUtilization;
+};
 #endif
